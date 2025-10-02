@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team 409 Fantasy Football Newsletter Generator</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .tab-active { border-bottom: 3px solid #f59e0b; color: #f59e0b; }
+        @media print {
+            body { background: white; color: black; }
+            .no-print { display: none !important; }
+            .print-content { max-width: 100%; }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const TEAMS = {
+            "tm_mr_409": { name: "Mr. 409", owner: "Maurice Proctor" },
+            "tm_the_mayberry": { name: "The Mayberry", owner: "Darius Mayberry" },
+            "tm_nessajean": { name: "NessaJean", owner: "Vanessa Mayberry" },
+            "tm_team_toyz": { name: "Team Toyz", owner: "LaToya Mayberry" },
+            "tm_pudding_smith": { name: "Pudding Smith", owner: "Gloria Smith" },
+            "tm_team_proctor_jr": { name: "Team Proctor Jr.", owner: "Hubert Proctor Jr." },
+            "tm_team_lib": { name: "Team Lib", owner: "Leann Smith" },
+            "tm_team_lattes": { name: "Team Lattes", owner: "Kristin Smith" },
+            "tm_rodney": { name: "Rodney", owner: "Rodney Fisher" },
+            "tm_ravennation08": { name: "Ravenation08", owner: "Darrenado Clary" },
+            "tm_charlotte_nc_bdoug": { name: "Charlotte NC BDoug", owner: "Brandi Douglas" },
+            "tm_the_chicken_boys": { name: "The Chicken Boys", owner: "Darrell Mayberry" },
+            "tm_team_jaston_welling": { name: "Team Jaston Welling", owner: "Denzel Proctor" }
+        };
+
+        function App() {
+            const [data, setData] = useState(() => {
+                const saved = localStorage.getItem('fantasy_league_data_v2');
+                if (saved) {
+                    return JSON.parse(saved);
+                }
+                const initial = {
+                    league_name: "Team 409 Fantasy Football League",
+                    current_season: "2025",
+                    current_week: 4,
+                    seasons: {},
+                    rivalries: {},
+                    newsletters: {}
+                };
+                initial.seasons["2025"] = {
+                    teams: Object.keys(TEAMS).reduce((acc, id) => {
+                        acc[id] = {
+                            id, name: TEAMS[id].name, owner: TEAMS[id].owner,
+                            wins: 0, losses: 0, ties: 0, points_for: 0, points_against: 0
+                        };
+                        return acc;
+                    }, {}),
+                    weeks: {}
+                };
+                return initial;
+            });
+
+            const [activeTab, setActiveTab] = useState('input');
+            const [selectedSeason, setSelectedSeason] = useState(data.current_season);
+            const [currentWeek, setCurrentWeek] = useState(data.current_week);
+            const [matchups, setMatchups] = useState([
+                { team1: '', score1: '', team2: '', score2: '', notes: '' },
+                { team1: '', score1: '', team2: '', score2: '', notes: '' },
+                { team1: '', score1: '', team2: '', score2: '', notes: '' },
+                { team1: '', score1: '', team2: '', score2: '', notes: '' },
+                { team1: '', score1: '', team2: '', score2: '', notes: '' },
+                { team1: '', score1: '', team2: '', score2: '', notes: '' }
+            ]);
+            const [byeTeam, setByeTeam] = useState('');
+            const [generating, setGenerating] = useState(false);
+            const [newsletter, setNewsletter] = useState('');
+            const [apiKey, setApiKey] = useState(localStorage.getItem('anthropic_api_key') || '');
+            const [newsletterTone, setNewsletterTone] = useState('funny');
+            const [customStorylines, setCustomStorylines] = useState('');
+            const [newsletterSections, setNewsletterSections] = useState({
+                commissioners_corner: true,
+                game_recaps: true,
+                standings: true,
+                awards: true,
+                power_rankings: true,
+                trash_talk: true,
+                rivalries: true,
+                playoff_watch: true
+            });
+
+            useEffect(() => {
+                localStorage.setItem('fantasy_league_data_v2', JSON.stringify(data));
+            }, [data]);
+
+            useEffect(() => {
+                localStorage.setItem('anthropic_api_key', apiKey);
+            }, [apiKey]);
+
+            useEffect(() => {
+                const season = data.seasons[selectedSeason];
+                if (season && season.weeks[currentWeek]) {
+                    setMatchups(season.weeks[currentWeek].matchups || matchups);
+                    setByeTeam(season.weeks[currentWeek].byeTeam || '');
+                }
+            }, [currentWeek, selectedSeason]);
+
+            const currentSeasonData = useMemo(() => {
+                return data.seasons[selectedSeason] || { teams: {}, weeks: {} };
+            }, [data.seasons, selectedSeason]);
+
+            const updateMatchup = (index, field, value) => {
+                const newMatchups = [...matchups];
+                newMatchups[index] = { ...newMatchups[index], [field]: value };
+                setMatchups(newMatchups);
+            };
+
+            const calculateWeeklyAwards = (weekMatchups) => {
+                let highestScore = { team: '', score: 0 };
+                let lowestScore = { team: '', score: 9999 };
+                let biggestBlowout = { winner: '', loser: '', margin: 0 };
+                let closestGame = { winner: '', loser: '', margin: 9999 };
+
+                weekMatchups.forEach(m => {
+                    if (m.team1 && m.team2 && m.score1 !== '' && m.score2 !== '') {
+                        const s1 = parseFloat(m.score1);
+                        const s2 = parseFloat(m.score2);
+                        const margin = Math.abs(s1 - s2);
+                        
+                        if (s1 > highestScore.score) highestScore = { team: TEAMS[m.team1].name, score: s1 };
+                        if (s2 > highestScore.score) highestScore = { team: TEAMS[m.team2].name, score: s2 };
+                        if (s1 < lowestScore.score) lowestScore = { team: TEAMS[m.team1].name, score: s1 };
+                        if (s2 < lowestScore.score) lowestScore = { team: TEAMS[m.team2].name, score: s2 };
+                        
+                        if (margin > biggestBlowout.margin) {
+                            biggestBlowout = {
+                                winner: s1 > s2 ? TEAMS[m.team1].name : TEAMS[m.team2].name,
+                                loser: s1 < s2 ? TEAMS[m.team1].name : TEAMS[m.team2].name,
+                                margin
+                            };
+                        }
+                        
+                        if (margin < closestGame.margin) {
+                            closestGame = {
+                                winner: s1 > s2 ? TEAMS[m.team1].name : TEAMS[m.team2].name,
+                                loser: s1 < s2 ? TEAMS[m.team1].name : TEAMS[m.team2].name,
+                                margin
+                            };
+                        }
+                    }
+                });
+
+                return { highestScore, lowestScore, biggestBlowout, closestGame };
+            };
+
+            const saveWeek = () => {
+                const newData = { ...data };
+                const season = newData.seasons[selectedSeason];
+                const updatedTeams = { ...season.teams };
+                
+                matchups.forEach(m => {
+                    if (m.team1 && m.team2 && m.score1 !== '' && m.score2 !== '') {
+                        const s1 = parseFloat(m.score1);
+                        const s2 = parseFloat(m.score2);
+                        
+                        updatedTeams[m.team1].points_for += s1;
+                        updatedTeams[m.team1].points_against += s2;
+                        updatedTeams[m.team2].points_for += s2;
+                        updatedTeams[m.team2].points_against += s1;
+                        
+                        if (s1 > s2) {
+                            updatedTeams[m.team1].wins += 1;
+                            updatedTeams[m.team2].losses += 1;
+                        } else if (s2 > s1) {
+                            updatedTeams[m.team2].wins += 1;
+                            updatedTeams[m.team1].losses += 1;
+                        } else {
+                            updatedTeams[m.team1].ties += 1;
+                            updatedTeams[m.team2].ties += 1;
+                        }
+
+                        const rivalryKey = [m.team1, m.team2].sort().join('_vs_');
+                        if (!newData.rivalries[rivalryKey]) {
+                            newData.rivalries[rivalryKey] = {
+                                team1: m.team1,
+                                team2: m.team2,
+                                team1_wins: 0,
+                                team2_wins: 0,
+                                ties: 0,
+                                games: []
+                            };
+                        }
+                        
+                        if (s1 > s2) newData.rivalries[rivalryKey].team1_wins += 1;
+                        else if (s2 > s1) newData.rivalries[rivalryKey].team2_wins += 1;
+                        else newData.rivalries[rivalryKey].ties += 1;
+                        
+                        newData.rivalries[rivalryKey].games.push({
+                            season: selectedSeason,
+                            week: currentWeek,
+                            team1_score: s1,
+                            team2_score: s2
+                        });
+                    }
+                });
+
+                const awards = calculateWeeklyAwards(matchups);
+                season.teams = updatedTeams;
+                season.weeks[currentWeek] = { matchups, byeTeam, awards, date: new Date().toISOString() };
+                newData.current_week = currentWeek + 1;
+                
+                setData(newData);
+                setCurrentWeek(currentWeek + 1);
+                alert(`Week ${currentWeek} saved! Moving to Week ${currentWeek + 1}`);
+            };
+
+            const generateNewsletter = async () => {
+                if (!apiKey) {
+                    alert('Please enter your Anthropic API key in Settings tab first!');
+                    setActiveTab('settings');
+                    return;
+                }
+
+                setGenerating(true);
+                try {
+                    const standings = Object.values(currentSeasonData.teams)
+                        .sort((a, b) => {
+                            if (b.wins !== a.wins) return b.wins - a.wins;
+                            return b.points_for - a.points_for;
+                        });
+
+                    const weekData = currentSeasonData.weeks[currentWeek - 1];
+                    const awards = weekData?.awards || {};
+
+                    let rivalryContext = '\\n\\nALL-TIME RIVALRIES:\\n';
+                    Object.values(data.rivalries).forEach(r => {
+                        const t1 = TEAMS[r.team1]?.name || r.team1;
+                        const t2 = TEAMS[r.team2]?.name || r.team2;
+                        rivalryContext += `${t1} vs ${t2}: ${r.team1_wins}-${r.team2_wins}${r.ties > 0 ? `-${r.ties}` : ''}\\n`;
+                    });
+
+                    const toneInstructions = {
+                        funny: 'Very funny, trash-talk heavy, lots of jokes and roasts',
+                        professional: 'Professional sports journalism style, analytical but engaging',
+                        dramatic: 'Dramatic storytelling, build suspense, epic narratives',
+                        casual: 'Casual friend chatting about the games, conversational'
+                    };
+
+                    let sectionsPrompt = '\\n\\nINCLUDE THESE SECTIONS:\\n';
+                    if (newsletterSections.commissioners_corner) sectionsPrompt += "- Commissioner's Corner opening\\n";
+                    if (newsletterSections.game_recaps) sectionsPrompt += '- Game-by-game recaps\\n';
+                    if (newsletterSections.standings) sectionsPrompt += '- Current standings\\n';
+                    if (newsletterSections.awards) sectionsPrompt += '- Weekly awards\\n';
+                    if (newsletterSections.power_rankings) sectionsPrompt += '- Power rankings\\n';
+                    if (newsletterSections.trash_talk) sectionsPrompt += '- Trash talk corner\\n';
+                    if (newsletterSections.rivalries) sectionsPrompt += '- Rivalry updates\\n';
+                    if (newsletterSections.playoff_watch) sectionsPrompt += '- Playoff implications\\n';
+
+                    const prompt = `Generate a fantasy football newsletter for Team 409 Fantasy Football League.
+
+SEASON: ${selectedSeason}
+CURRENT WEEK: ${currentWeek}
+COMMISSIONER: Darrell Mayberry (The Chicken Boys)
+
+CURRENT STANDINGS (after Week ${currentWeek - 1}):
+${standings.map((t, i) => 
+    `${i + 1}. ${t.name} (${t.owner}): ${t.wins}-${t.losses}${t.ties > 0 ? `-${t.ties}` : ''} | ${t.points_for.toFixed(2)} PF`
+).join('\\n')}
+
+WEEK ${currentWeek - 1} MATCHUPS:
+${matchups.filter(m => m.team1 && m.team2).map(m => {
+    const t1 = currentSeasonData.teams[m.team1];
+    const t2 = currentSeasonData.teams[m.team2];
+    const s1 = parseFloat(m.score1);
+    const s2 = parseFloat(m.score2);
+    const winner = s1 > s2 ? t1.name : t2.name;
+    const loser = s1 > s2 ? t2.name : t1.name;
+    return `${winner} ${Math.max(s1, s2).toFixed(2)} def. ${loser} ${Math.min(s1, s2).toFixed(2)}${m.notes ? ' - ' + m.notes : ''}`;
+}).join('\\n')}
+
+WEEKLY AWARDS:
+- Highest Scorer: ${awards.highestScore?.team || 'N/A'} (${awards.highestScore?.score?.toFixed(2) || 0} pts)
+- Biggest Blowout: ${awards.biggestBlowout?.winner || 'N/A'} over ${awards.biggestBlowout?.loser || 'N/A'}
+- Closest Game: ${awards.closestGame?.winner || 'N/A'} over ${awards.closestGame?.loser || 'N/A'} by ${awards.closestGame?.margin?.toFixed(2) || 0}
+
+${rivalryContext}
+
+${customStorylines ? `\\nCUSTOM STORYLINES:\\n${customStorylines}\\n` : ''}
+
+NEWSLETTER TONE: ${toneInstructions[newsletterTone]}
+
+${sectionsPrompt}
+
+FAMILY CONTEXT:
+- Mayberry Clan: Darrell, LaToya, Vanessa, Darius
+- Smith Sisters: Gloria, Kristin, Leann
+- Proctor Family: Maurice, Hubert Jr., Denzel
+
+Make it entertaining and specific!`;
+
+                    const response = await fetch("https://api.anthropic.com/v1/messages", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "x-api-key": apiKey,
+                            "anthropic-version": "2023-06-01"
+                        },
+                        body: JSON.stringify({
+                            model: "claude-sonnet-4-20250514",
+                            max_tokens: 4000,
+                            messages: [{ role: "user", content: prompt }]
+                        })
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.content && result.content[0]) {
+                        const generatedNewsletter = result.content[0].text;
+                        setNewsletter(generatedNewsletter);
+                        
+                        const newData = { ...data };
+                        const key = `${selectedSeason}_week_${currentWeek - 1}`;
+                        newData.newsletters[key] = {
+                            content: generatedNewsletter,
+                            tone: newsletterTone,
+                            date: new Date().toISOString()
+                        };
+                        setData(newData);
+                        setActiveTab('newsletter');
+                    } else {
+                        throw new Error(result.error?.message || 'Invalid API response');
+                    }
+                } catch (error) {
+                    alert('Error: ' + error.message);
+                } finally {
+                    setGenerating(false);
+                }
+            };
+
+            const importRivalryData = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const h2hData = JSON.parse(event.target.result);
+                        const newData = { ...data };
+                        
+                        if (h2hData.matrix) {
+                            h2hData.matrix.forEach(entry => {
+                                entry.vs.forEach(matchup => {
+                                    const rivalryKey = [entry.home_team_id, matchup.away_team_id].sort().join('_vs_');
+                                    if (!newData.rivalries[rivalryKey]) {
+                                        newData.rivalries[rivalryKey] = {
+                                            team1: entry.home_team_id,
+                                            team2: matchup.away_team_id,
+                                            team1_wins: entry.home_team_id < matchup.away_team_id ? matchup.wins : matchup.losses,
+                                            team2_wins: entry.home_team_id < matchup.away_team_id ? matchup.losses : matchup.wins,
+                                            ties: matchup.ties || 0,
+                                            games: []
+                                        };
+                                    }
+                                });
+                            });
+                        }
+                        
+                        setData(newData);
+                        alert('Rivalry data imported successfully!');
+                    } catch (error) {
+                        alert('Error importing: ' + error.message);
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const exportData = () => {
+                const dataStr = JSON.stringify(data, null, 2);
+                const blob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `team409_backup_${new Date().toISOString().split('T')[0]}.json`;
+                link.click();
+            };
+
+            const importData = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const imported = JSON.parse(event.target.result);
+                        setData(imported);
+                        setSelectedSeason(imported.current_season);
+                        setCurrentWeek(imported.current_week);
+                        alert('Data imported successfully!');
+                    } catch (error) {
+                        alert('Error: ' + error.message);
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const copyNewsletter = () => {
+                navigator.clipboard.writeText(newsletter);
+                alert('Copied to clipboard!');
+            };
+
+            const printNewsletter = () => {
+                window.print();
+            };
+
+            return (
+                <div className="container mx-auto px-4 py-8 max-w-7xl">
+                    <header className="mb-8 text-center no-print">
+                        <h1 className="text-4xl font-bold text-amber-500 mb-2">🏈 Team 409 Fantasy Football</h1>
+                        <p className="text-slate-400">Season {selectedSeason} - Week {currentWeek}</p>
+                    </header>
+
+                    <div className="flex border-b border-slate-700 mb-6 overflow-x-auto no-print">
+                        {['input', 'standings', 'rivalries', 'newsletter', 'customize', 'settings'].map(tab => (
+                            <button 
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
+                                className={`px-6 py-3 font-semibold whitespace-nowrap ${activeTab === tab ? 'tab-active' : 'text-slate-400'}`}
+                            >
+                                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                            </button>
+                        ))}
+                    </div>
+
+                    {activeTab === 'input' && (
+                        <div className="bg-slate-800 p-6 rounded-lg">
+                            <h2 className="text-2xl font-bold mb-4">Week {currentWeek} Matchups</h2>
+                            
+                            {matchups.map((matchup, index) => (
+                                <div key={index} className="mb-6 p-4 bg-slate-700 rounded">
+                                    <h3 className="font-bold mb-3">Matchup {index + 1}</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                                        <div>
+                                            <select 
+                                                value={matchup.team1}
+                                                onChange={(e) => updateMatchup(index, 'team1', e.target.value)}
+                                                className="w-full p-2 bg-slate-600 rounded mb-2 text-white"
+                                            >
+                                                <option value="">Select Team 1</option>
+                                                {Object.entries(TEAMS).map(([id, team]) => (
+                                                    <option key={id} value={id}>{team.name} ({team.owner})</option>
+                                                ))}
+                                            </select>
+                                            <input 
+                                                type="number" 
+                                                step="0.01"
+                                                placeholder="Score"
+                                                value={matchup.score1}
+                                                onChange={(e) => updateMatchup(index, 'score1', e.target.value)}
+                                                className="w-full p-2 bg-slate-600 rounded text-white"
+                                            />
+                                        </div>
+                                        <div>
+                                            <select 
+                                                value={matchup.team2}
+                                                onChange={(e) => updateMatchup(index, 'team2', e.target.value)}
+                                                className="w-full p-2 bg-slate-600 rounded mb-2 text-white"
+                                            >
+                                                <option value="">Select Team 2</option>
+                                                {Object.entries(TEAMS).map(([id, team]) => (
+                                                    <option key={id} value={id}>{team.name} ({team.owner})</option>
+                                                ))}
+                                            </select>
+                                            <input 
+                                                type="number" 
+                                                step="0.01"
+                                                placeholder="Score"
+                                                value={matchup.score2}
+                                                onChange={(e) => updateMatchup(index, 'score2', e.target.value)}
+                                                className="w-full p-2 bg-slate-600 rounded text-white"
+                                            />
+                                        </div>
+                                    </div>
+                                    <input 
+                                        type="text"
+                                        placeholder="Game notes (optional)"
+                                        value={matchup.notes}
+                                        onChange={(e) => updateMatchup(index, 'notes', e.target.value)}
+                                        className="w-full p-2 bg-slate-600 rounded text-white"
+                                    />
+                                </div>
+                            ))}
+
+                            <div className="mb-4">
+                                <label className="block mb-2 font-bold">Bye Week Team</label>
+                                <select 
+                                    value={byeTeam}
+                                    onChange={(e) => setByeTeam(e.target.value)}
+                                    className="w-full p-2 bg-slate-600 rounded text-white"
+                                >
+                                    <option value="">No bye week</option>
+                                    {Object.entries(TEAMS).map(([id, team]) => (
+                                        <option key={id} value={id}>{team.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="flex gap-4">
+                                <button 
+                                    onClick={saveWeek}
+                                    className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-3 px-6 rounded"
+                                >
+                                    Save Week {currentWeek}
+                                </button>
+                                <button 
+                                    onClick={generateNewsletter}
+                                    disabled={generating}
+                                    className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded disabled:opacity-50"
+                                >
+                                    {generating ? 'Generating...' : 'Generate Newsletter'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'standings' && (
+                        <div className="bg-slate-800 p-6 rounded-lg">
+                            <h2 className="text-2xl font-bold mb-4">Season {selectedSeason} Standings</h2>
+                            <table className="w-full">
+                                <thead>
+                                    <tr className="border-b border-slate-700">
+                                        <th className="text-left p-3">Rank</th>
+                                        <th className="text-left p-3">Team</th>
+                                        <th className="text-center p-3">W-L</th>
+                                        <th className="text-center p-3">PF</th>
+                                        <th className="text-center p-3">PA</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {Object.values(currentSeasonData.teams)
+                                        .sort((a, b) => {
+                                            if (b.wins !== a.wins) return b.wins - a.wins;
+                                            return b.points_for - a.points_for;
+                                        })
+                                        .map((team, index) => (
+                                            <tr key={team.id} className={`border-b border-slate-700 ${index < 6 ? 'bg-green-900 bg-opacity-20' : ''}`}>
+                                                <td className="p-3">{index + 1}</td>
+                                                <td className="p-3 font-semibold">{team.name}</td>
+                                                <td className="p-3 text-center">{team.wins}-{team.losses}</td>
+                                                <td className="p-3 text-center">{team.points_for.toFixed(2)}</td>
+                                                <td className="p-3 text-center">{team.points_against.toFixed(2)}</td>
+                                            </tr>
+                                        ))
+                                    }
+                                </tbody>
+                            </table>
+                            <p className="text-sm text-slate-400 mt-4">🟢 Top 6 make playoffs</p>
+                        </div>
+                    )}
+
+                    {activeTab === 'rivalries' && (
+                        <div className="bg-slate-800 p-6 rounded-lg">
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-2xl font-bold">All-Time Rivalries</h2>
+                                <label className="bg-blue-600 px-4 py-2 rounded text-sm cursor-pointer hover:bg-blue-700">
+                                    Import h2h_matrix.json
+                                    <input type="file" accept=".json" onChange={importRivalryData} className="hidden" />
+                                </label>
+                            </div>
+                            
+                            {Object.keys(data.rivalries).length === 0 ? (
+                                <p className="text-slate-400">No rivalry data yet. Import h2h_matrix.json or play more weeks.</p>
+                            ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {Object.values(data.rivalries).map((rivalry, idx) => {
+                                        const t1 = TEAMS[rivalry.team1];
+                                        const t2 = TEAMS[rivalry.team2];
+                                        return (
+                                            <div key={idx} className="bg-slate-700 p-4 rounded">
+                                                <h3 className="font-bold mb-2">{t1?.name} vs {t2?.name}</h3>
+                                                <p className="text-amber-500 text-lg">
+                                                    {rivalry.team1_wins} - {rivalry.team2_wins}
+                                                    {rivalry.ties > 0 ? ` - ${rivalry.ties}` : ''}
+                                                </p>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {activeTab === 'newsletter' && (
+                        <div className="bg-slate-800 p-6 rounded-lg print-content">
+                            <div className="flex justify-between items-center mb-4 no-print">
+                                <h2 className="text-2xl font-bold">Generated Newsletter</h2>
+                                <div className="flex gap-2">
+                                    {newsletter && (
+                                        <>
+                                            <button 
+                                                onClick={copyNewsletter}
+                                                className="bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2 px-4 rounded"
+                                            >
+                                                📋 Copy
+                                            </button>
+                                            <button 
+                                                onClick={printNewsletter}
+                                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+                                            >
+                                                🖨️ Print
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                            {newsletter ? (
+                                <div className="bg-white text-black p-6 rounded whitespace-pre-wrap">
+                                    {newsletter}
+                                </div>
+                            ) : (
+                                <p className="text-slate-400">No newsletter yet. Go to Input tab and click "Generate Newsletter"</p>
+                            )}
+                        </div>
+                    )}
+
+                    {activeTab === 'customize' && (
+                        <div className="bg-slate-800 p-6 rounded-lg space-y-6">
+                            <h2 className="text-2xl font-bold mb-4">Newsletter Customization</h2>
+                            
+                            <div>
+                                <label className="block mb-2 font-bold">Newsletter Tone</label>
+                                <select 
+                                    value={newsletterTone}
+                                    onChange={(e) => setNewsletterTone(e.target.value)}
+                                    className="w-full p-3 bg-slate-700 rounded text-white"
+                                >
+                                    <option value="funny">Funny & Trash Talk</option>
+                                    <option value="professional">Professional</option>
+                                    <option value="dramatic">Dramatic</option>
+                                    <option value="casual">Casual</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block mb-2 font-bold">Custom Storylines</label>
+                                <textarea 
+                                    value={customStorylines}
+                                    onChange={(e) => setCustomStorylines(e.target.value)}
+                                    placeholder="Add custom storylines, drama, trades, trash talk..."
+                                    className="w-full p-3 bg-slate-700 rounded h-32 text-white"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block mb-2 font-bold">Newsletter Sections</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {Object.entries(newsletterSections).map(([key, value]) => (
+                                        <label key={key} className="flex items-center space-x-2 cursor-pointer">
+                                            <input 
+                                                type="checkbox"
+                                                checked={value}
+                                                onChange={(e) => setNewsletterSections({
+                                                    ...newsletterSections,
+                                                    [key]: e.target.checked
+                                                })}
+                                                className="w-5 h-5"
+                                            />
+                                            <span className="capitalize">{key.replace(/_/g, ' ')}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'settings' && (
+                        <div className="bg-slate-800 p-6 rounded-lg space-y-6">
+                            <div>
+                                <h2 className="text-2xl font-bold mb-4">API Settings</h2>
+                                <label className="block mb-2 font-bold">Anthropic API Key</label>
+                                <input 
+                                    type="password"
+                                    value={apiKey}
+                                    onChange={(e) => setApiKey(e.target.value)}
+                                    placeholder="sk-ant-..."
+                                    className="w-full p-3 bg-slate-700 rounded text-white"
+                                />
+                                <p className="text-sm text-slate-400 mt-2">
+                                    Get your API key from <a href="https://console.anthropic.com/" target="_blank" className="text-amber-500 underline">console.anthropic.com</a>
+                                </p>
+                            </div>
+
+                            <div>
+                                <h2 className="text-2xl font-bold mb-4">Data Management</h2>
+                                <div className="space-y-3">
+                                    <button 
+                                        onClick={exportData}
+                                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded"
+                                    >
+                                        💾 Export Data (Backup)
+                                    </button>
+                                    
+                                    <label className="block w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded text-center cursor-pointer">
+                                        📥 Import Data (Restore)
+                                        <input 
+                                            type="file" 
+                                            accept=".json"
+                                            onChange={importData}
+                                            className="hidden"
+                                        />
+                                    </label>
+                                    
+                                    <button 
+                                        onClick={() => {
+                                            if (confirm('Delete ALL data?')) {
+                                                localStorage.clear();
+                                                window.location.reload();
+                                            }
+                                        }}
+                                        className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded"
+                                    >
+                                        🗑️ Reset All Data
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="bg-slate-700 p-4 rounded">
+                                <h3 className="font-bold mb-2">App Info</h3>
+                                <p className="text-sm">Team 409 Fantasy Football v2.0</p>
+                                <p className="text-xs text-slate-400 mt-2">
+                                    All features working: Rivalry tracking, Multi-season, Custom newsletters, Print support
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
